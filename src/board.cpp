@@ -18,29 +18,23 @@ static bool navLongFired = false;
 
 void board_init() {
     Serial.begin(115200);
-    delay(200);
-    Serial.println("\n[TerminalX] boot");
+    Serial.printf("\n[TerminalX] v%s boot\n", TERMINALX_VERSION);
 
     auto cfg = M5.config();
-    M5.begin(cfg);
-    Serial.printf(
-        "[TerminalX] M5.begin done  board=%d  display=%dx%d\n",
-        (int)M5.getBoard(), (int)M5.Display.width(), (int)M5.Display.height()
-    );
+    M5.begin(cfg);                     // autodetects M5StickS3, powers the LCD
 
     // Backlight PWM on GPIO38 (StickS3 drives its backlight here manually)
     pinMode(TFT_BL_PIN, OUTPUT);
     ledcAttach(TFT_BL_PIN, 5000, 8);
     ledcWrite(TFT_BL_PIN, 255);
-    M5.Display.setBrightness(255);     // belt-and-suspenders
-
-    M5.Display.setRotation(3);         // landscape 240x135 (match Bruce)
-
-    // Visible boot flash: if the panel is alive we SEE green for a moment.
-    M5.Display.fillScreen(COL_ACCENT);
-    delay(400);
+    M5.Display.setBrightness(255);
+    M5.Display.setRotation(3);         // landscape 240x135
     M5.Display.fillScreen(COL_BG);
-    Serial.println("[TerminalX] display flashed");
+
+    Serial.printf(
+        "[TerminalX] display %dx%d board=%d\n",
+        (int)M5.Display.width(), (int)M5.Display.height(), (int)M5.getBoard()
+    );
 
     M5.Power.setExtOutput(false);      // stop the buzzing on ext power
 
@@ -55,7 +49,6 @@ void board_init() {
 
     pinMode(BTN_OK_PIN, INPUT_PULLUP);
     pinMode(BTN_NAV_PIN, INPUT_PULLUP);
-    Serial.println("[TerminalX] board_init complete");
 }
 
 void board_update() {
