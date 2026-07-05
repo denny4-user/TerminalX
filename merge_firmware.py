@@ -39,5 +39,41 @@ def merge_bin(source, target, env):
     print("[TerminalX] merging web-flasher image -> " + out)
     env.Execute(cmd)
 
+    write_build_info(proj, out_dir, out)
+
+
+def write_build_info(proj, out_dir, out):
+    import json, datetime, subprocess
+
+    version = "?"
+    try:
+        with open(os.path.join(proj, "src", "config.h")) as f:
+            for ln in f:
+                if "TERMINALX_VERSION" in ln and '"' in ln:
+                    version = ln.split('"')[1]
+                    break
+    except Exception:
+        pass
+
+    commit = ""
+    try:
+        commit = (
+            subprocess.check_output(["git", "-C", proj, "rev-parse", "--short", "HEAD"])
+            .decode()
+            .strip()
+        )
+    except Exception:
+        pass
+
+    info = {
+        "version": version,
+        "date": datetime.datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "commit": commit,
+        "size": os.path.getsize(out) if os.path.isfile(out) else 0,
+    }
+    with open(os.path.join(out_dir, "build-info.json"), "w") as f:
+        json.dump(info, f, indent=2)
+    print("[TerminalX] build v%s (%s) %s" % (version, info["date"], commit))
+
 
 env.AddPostAction("$BUILD_DIR/${PROGNAME}.bin", merge_bin)

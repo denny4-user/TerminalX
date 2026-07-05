@@ -16,7 +16,10 @@
     .logo { font-size:44px; font-weight:700; letter-spacing:2px; color:var(--accent);
             text-shadow:0 0 18px rgba(0,230,118,.45); }
     .logo span { color:var(--fg); }
-    .tag { color:var(--dim); margin:6px 0 28px; font-size:14px; }
+    .tag { color:var(--dim); margin:6px 0 10px; font-size:14px; }
+    .ver { color:var(--accent); font-size:12px; letter-spacing:.5px; margin:0 0 24px;
+           opacity:.85; min-height:14px; }
+    .ver b { color:var(--fg); }
     .card {
       border:1px solid #143a1e; border-radius:14px; padding:26px 24px; max-width:460px;
       background:linear-gradient(180deg,#04120a,#000); box-shadow:0 0 40px rgba(0,230,118,.08);
@@ -36,6 +39,7 @@
 <body>
   <div class="logo">Terminal<span>X</span></div>
   <div class="tag">IR-мультитул для M5Stack&nbsp;StickS3</div>
+  <div class="ver" id="ver"></div>
 
   <div class="card">
     <esp-web-install-button manifest="manifest.json">
@@ -60,5 +64,17 @@
 
   <script type="module"
     src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js?module"></script>
+
+  <script>
+    // Show the exact build being served (written by merge_firmware.py each build).
+    fetch('firmware/build-info.json?_=' + Date.now())
+      .then(r => r.ok ? r.json() : Promise.reject())
+      .then(d => {
+        var el = document.getElementById('ver');
+        el.innerHTML = 'сборка <b>v' + d.version + '</b> · ' + d.date +
+          (d.commit ? ' · ' + d.commit : '');
+      })
+      .catch(function () {});
+  </script>
 </body>
 </html>
