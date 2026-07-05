@@ -1,50 +1,48 @@
 # TerminalX
 
-Минималистичная, оптимизированная прошивка-мультитул для **M5Stack StickS3** (ESP32-S3).
-Первый модуль — **IR**. Основана на идеях [Bruce](https://github.com/pr3y/Bruce),
-но написана с нуля на M5Unified для максимальной простоты и предсказуемости.
+Прошивка-мультитул для **M5Stack StickS3** (ESP32-S3, 8 МБ). Базируется на проверенном
+форке [Bruce](https://github.com/pr3y/Bruce) (**Bruce-A-C-Edition**), собранном только под
+этот борд. Первый рабочий модуль — **IR** (клон пультов + TV-B-Gone).
 
-## Возможности (v0.1)
+Веб-флешер (прошивка из браузера, Chrome/Edge): **https://denny4-user.github.io/TerminalX/**
 
-- **TV Power Off** — перебор базы IR-кодов выключения телевизоров (137 NA + 148 EU = 285
-  кодов), режимы NA / EU / All. Шанс успеха стремится к 100%.
-- **Clone Remote** — сканирование кнопки любого пульта (raw) и её ретрансляция.
-
-## Управление (2 кнопки)
-
-| Кнопка | Коротко | Долго |
-| --- | --- | --- |
-| Передняя «M5» (G11) | OK / выбрать / отправить | — |
-| Боковая (G12) | следующий пункт | назад |
+> На устройстве интерфейс пока брендирован как Bruce — переименование в TerminalX
+> и обрезка лишних функций идут по мере тестирования (по очереди, начиная с IR).
 
 ## Сборка
 
 Нужен [PlatformIO](https://platformio.org/).
 
 ```bash
-pio run                 # собрать
-pio run -t upload       # собрать и прошить по USB
-pio device monitor      # лог (115200)
+pio run -e m5stack-sticks3          # собрать (default env)
+pio run -e m5stack-sticks3 -t upload
 ```
 
-После сборки объединённый образ для веб-флешера кладётся в
-`docs/firmware/TerminalX.bin` автоматически.
+После сборки `build.py` кладёт готовый склеенный образ `Bruce-m5stack-sticks3.bin`
+(bootloader@0x0 + partitions@0x8000 + app@0x10000). Для веб-флешера он копируется в
+`docs/firmware/TerminalX.bin`.
 
-## Прошивка из браузера
+### Заметка про сборку (net80211)
 
-Веб-флешер на GitHub Pages: **https://denny4-user.github.io/TerminalX/**
-(Chrome/Edge на десктопе, Web Serial). Настройка Pages: Settings → Pages → GitHub Actions.
+`patch.py` ослабляет символ `ieee80211_raw_frame_sanity_check` в `libnet80211.a`
+(нужно для инъекции raw-фреймов WiFi). Если в скачанном `framework-arduinoespressif32-libs`
+для esp32s3 патч не отработал (либа осталась как `libnet80211.a.old`), верни её и собери с
+`-Wl,--allow-multiple-definition` (уже прописан в `platformio.ini`):
 
-## Пины (M5StickS3)
+```bash
+LIB=~/.platformio/packages/framework-arduinoespressif32-libs/esp32s3/lib
+cp "$LIB/libnet80211.a.old" "$LIB/libnet80211.a"
+```
 
-| Функция | GPIO |
+## Управление (M5StickS3)
+
+| Кнопка | Функция |
 | --- | --- |
-| IR TX (LED) | 46 (active HIGH) |
-| IR RX | 42 |
-| Кнопка OK | 11 |
-| Кнопка NAV | 12 |
-| Подсветка | 38 |
+| Передняя «M5» (G11) | выбрать / OK |
+| Боковая (G12) | листать / назад |
 
-## Дисклеймер
+## Лицензия и благодарности
 
-Только для тестирования собственных устройств.
+Основано на [Bruce](https://github.com/pr3y/Bruce) (и форке Bruce-A-C-Edition).
+Распространяется под **AGPL-3.0** — см. [LICENSE](LICENSE). Огромная благодарность
+команде Bruce и bmorcelli за проделанную работу.
