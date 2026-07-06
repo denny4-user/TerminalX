@@ -27,7 +27,11 @@ def merge_bin(source, target, env):
     else:
         base = '"%s" -m esptool' % py
 
-    flash_mode = env.subst("$BOARD_FLASH_MODE") or "qio"
+    # DIO, never QIO: a QIO bootloader header bricks the M5StickS3 (the ROM
+    # can't read the 2nd-stage bootloader in QIO -> TG0WDT bootloop / black
+    # screen). Downgrade quad modes to their dual equivalent for the image.
+    flash_mode = env.subst("$BOARD_FLASH_MODE") or "dio"
+    flash_mode = {"qio": "dio", "qout": "dout"}.get(flash_mode, flash_mode)
 
     cmd = (
         '%s --chip esp32s3 merge_bin -o "%s" '
