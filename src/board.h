@@ -9,6 +9,7 @@ int  board_battery();    // 0..100
 void board_power_off();
 
 // Button edge events. Valid only for the frame after board_update().
-extern bool ok_click;    // front button, short press
-extern bool nav_click;   // side button, short press  -> Next
-extern bool nav_long;    // side button, long press   -> Back
+extern bool ok_click;    // front "M5" button, short press -> Select / OK
+extern bool nav_click;   // side button, single press      -> Down / Next
+extern bool nav_double;  // side button, double press       -> Up / Prev
+extern bool nav_long;    // side button, hold               -> Back / Stop

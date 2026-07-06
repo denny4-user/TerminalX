@@ -3,6 +3,7 @@
 #include "ui.h"
 #include "ir.h"
 #include "tvbgone.h"
+#include "wifitools.h"
 #include "config.h"
 
 // ---------- IR: TV-B-Gone ----------
@@ -115,11 +116,12 @@ void setup() {
 }
 
 void loop() {
-    const char *items[] = {"IR Remote", "About", "Power Off"};
-    int c = ui_menu("TerminalX", items, 3);
+    const char *items[] = {"IR Remote", "WiFi", "About", "Power Off"};
+    int c = ui_menu("TerminalX", items, 4);
     if (c == 0) screen_ir();
-    else if (c == 1) screen_about();
-    else if (c == 2) {
+    else if (c == 1) wifitools_menu();
+    else if (c == 2) screen_about();
+    else if (c == 3) {
         ui_message("TerminalX", "Powering off...", nullptr);
         delay(600);
         board_power_off();

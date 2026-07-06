@@ -3,11 +3,13 @@
 
 bool ok_click = false;
 bool nav_click = false;
+bool nav_double = false;
 bool nav_long = false;
 
 static const uint32_t DEBOUNCE_MS = 20;
-static const uint32_t LONG_MS = 500;
+static const uint32_t LONG_MS = 500;    // hold side button this long = Back
 static const uint32_t OK_MAX_MS = 900;  // longer than this = ignore (not a tap)
+static const uint32_t DOUBLE_MS = 250;  // 2nd side tap within this = double-click
 
 static bool okDown = false;
 static uint32_t okAt = 0;
@@ -15,6 +17,10 @@ static uint32_t okAt = 0;
 static bool navDown = false;
 static uint32_t navAt = 0;
 static bool navLongFired = false;
+
+// Deferred single/double click: count taps, then commit once the gap passes.
+static uint8_t navClicks = 0;
+static uint32_t navLastRelease = 0;
 
 void board_init() {
     Serial.begin(115200);
@@ -53,7 +59,7 @@ void board_init() {
 
 void board_update() {
     M5.update();
-    ok_click = nav_click = nav_long = false;
+    ok_click = nav_click = nav_double = nav_long = false;
     uint32_t now = millis();
 
     bool okRaw = (digitalRead(BTN_OK_PIN) == LOW);
@@ -69,19 +75,31 @@ void board_update() {
         if (held >= DEBOUNCE_MS && held < OK_MAX_MS) ok_click = true;
     }
 
-    // ---- NAV (side) : short tap OR long press ----
+    // ---- NAV (side) : single tap / double tap / long hold ----
     if (navRaw && !navDown) {
         navDown = true;
         navAt = now;
         navLongFired = false;
     } else if (navRaw && navDown) {
+        // Hold = Back. Fires immediately, cancels any pending taps.
         if (!navLongFired && (now - navAt) >= LONG_MS) {
             nav_long = true;
             navLongFired = true;
+            navClicks = 0;
         }
     } else if (!navRaw && navDown) {
         navDown = false;
-        if (!navLongFired && (now - navAt) >= DEBOUNCE_MS) nav_click = true;
+        if (!navLongFired && (now - navAt) >= DEBOUNCE_MS) {
+            navClicks++;
+            navLastRelease = now;
+        }
+    }
+
+    // Commit taps once the double-click window closes and the button is up.
+    if (navClicks > 0 && !navDown && (now - navLastRelease) >= DOUBLE_MS) {
+        if (navClicks >= 2) nav_double = true;  // Up / Prev
+        else nav_click = true;                  // Down / Next
+        navClicks = 0;
     }
 }
 

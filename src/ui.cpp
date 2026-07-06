@@ -55,12 +55,16 @@ int ui_menu(const char *title, const char *const *items, int count, int start) {
     board_update();   // clear stale edges
     while (true) {
         board_update();
-        if (nav_click) {
+        if (nav_click) {                       // single side tap -> down
             sel = (sel + 1) % count;
             dirty = true;
         }
-        if (ok_click) return sel;
-        if (nav_long) return -1;
+        if (nav_double) {                      // double side tap -> up
+            sel = (sel - 1 + count) % count;
+            dirty = true;
+        }
+        if (ok_click) return sel;              // front button -> select
+        if (nav_long) return -1;               // hold side -> back
         if (dirty) {
             draw_menu(title, items, count, sel);
             dirty = false;
@@ -112,6 +116,32 @@ void ui_progress(const char *title, int cur, int total, const char *hint) {
         D.setCursor(10, 118);
         D.print(hint);
     }
+}
+
+void ui_live(const char *title, const char *line1, const char *line2) {
+    auto &D = M5.Display;
+    // Header, drawn opaque so it overwrites the previous frame (no clear/flash).
+    D.setTextSize(2);
+    D.setTextColor(COL_ACCENT, COL_BG);
+    D.setCursor(4, 3);
+    D.printf("%-14s", title);
+    D.setTextSize(1);
+    D.setTextColor(COL_DIM, COL_BG);
+    char b[8];
+    snprintf(b, sizeof(b), "%3d%%", board_battery());
+    D.setCursor(SCR_W - 4 * 6 - 3, 6);
+    D.print(b);
+    D.drawFastHLine(0, 20, SCR_W, COL_DIM);
+
+    // Body lines, space-padded so leftovers from longer text get erased.
+    D.setTextSize(2);
+    D.setTextColor(COL_FG, COL_BG);
+    D.setCursor(8, 54);
+    D.printf("%-19s", line1 ? line1 : "");
+    D.setTextSize(1);
+    D.setTextColor(COL_DIM, COL_BG);
+    D.setCursor(8, 84);
+    D.printf("%-39s", line2 ? line2 : "");
 }
 
 void ui_wait_any() {
