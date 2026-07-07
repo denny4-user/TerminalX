@@ -27,8 +27,13 @@ static void screen_clone() {
         ir_free(cloneSig);
         ir_rx_start();
 
-        // Wait for a signal, showing a live activity meter: if pressing the
-        // remote makes "RX" climb, the receiver is picking it up.
+        // Static frame drawn once; the live counter below updates in place
+        // (ui_live, no fillScreen) so the screen doesn't flicker every frame.
+        M5.Display.fillScreen(COL_BG);
+        ui_hint("point remote & press   hold side = back");
+
+        // Activity meter: if pressing the remote makes "RX edges" climb, the
+        // receiver is picking it up.
         uint32_t edges = 0;
         int last = ir_rx_level();
         uint32_t lastDraw = 0;
@@ -53,11 +58,11 @@ static void screen_clone() {
                 break;
             }
 
-            if (millis() - lastDraw > 120) {
+            if (millis() - lastDraw > 150) {
                 lastDraw = millis();
-                char l[40];
-                snprintf(l, sizeof(l), "RX: %lu", (unsigned long)edges);
-                ui_message("Point remote & press", l, "waiting signal / hold NAV=back");
+                char l[24];
+                snprintf(l, sizeof(l), "RX edges: %lu", (unsigned long)edges);
+                ui_live("IR Clone", "waiting signal", l);
             }
         }
         ir_rx_stop();

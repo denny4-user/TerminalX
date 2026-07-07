@@ -15,20 +15,21 @@ static IRrecv irrecv(IR_RX_PIN, 1024, 50);
 static decode_results results;
 
 void ir_init() {
-    irsend.begin();
-    // GPIO46 is an ESP32-S3 strapping pin; reset it to a plain GPIO before use
-    // (Bruce does this via setup_ir_pin) or TV-B-Gone / send is unreliable.
+    // GPIO46 is an ESP32-S3 strapping pin; reset it to a plain GPIO FIRST, then
+    // let IRsend.begin() configure it (bit-banged output).
     gpio_reset_pin((gpio_num_t)IR_TX_PIN);
+    irsend.begin();
     pinMode(IR_TX_PIN, OUTPUT);
     digitalWrite(IR_TX_PIN, LOW);
 }
 
 void ir_rx_start() {
-    irrecv.enableIRIn();
-    // GPIO42 is an ESP32-S3 JTAG pin (MTMS); without gpio_reset_pin it stays in
-    // JTAG mode and never sees the remote — this is why RX capture failed.
+    // GPIO42 is an ESP32-S3 JTAG pin (MTMS). Free it to a plain GPIO BEFORE
+    // enableIRIn — that call does pinMode(INPUT_PULLUP) AND attachInterrupt(CHANGE);
+    // resetting the pin afterwards (as before) killed that interrupt, so nothing
+    // was ever captured.
     gpio_reset_pin((gpio_num_t)IR_RX_PIN);
-    pinMode(IR_RX_PIN, INPUT_PULLUP);   // Bruce: setup_ir_pin(irRx, INPUT_PULLUP)
+    irrecv.enableIRIn();   // sets INPUT_PULLUP + attaches the pin-change interrupt
 }
 
 void ir_rx_stop() { irrecv.disableIRIn(); }
