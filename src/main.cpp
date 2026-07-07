@@ -110,9 +110,7 @@ void setup() {
     board_init();
     ir_init();
 
-    // splash
-    ui_message("TerminalX", "v" TERMINALX_VERSION, "loading...");
-    delay(700);
+    ui_splash(TERMINALX_VERSION);
 }
 
 void loop() {

