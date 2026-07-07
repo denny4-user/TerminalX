@@ -103,7 +103,7 @@ static void draw_header(const char *title) {
 }
 
 static void draw_menu(const char *title, const char *const *items, int count, int sel,
-                      const uint8_t *bars, const uint16_t *colors) {
+                      const uint8_t *bars) {
     auto &D = M5.Display;
     draw_header(title);
 
@@ -123,7 +123,7 @@ static void draw_menu(const char *title, const char *const *items, int count, in
             D.fillRoundRect(2, y, SCR_W - 4, rowH - 1, 2, COL_ACCENT);
             D.setTextColor(COL_BG, COL_ACCENT);
         } else {
-            D.setTextColor(colors ? colors[idx] : COL_FG, COL_BG);
+            D.setTextColor(COL_FG, COL_BG);
         }
         int tx = 8;
         if (bars) {                             // signal icon left of the SSID
@@ -137,7 +137,7 @@ static void draw_menu(const char *title, const char *const *items, int count, in
 }
 
 int ui_menu(const char *title, const char *const *items, int count, int start,
-            const uint8_t *bars, const uint16_t *colors) {
+            const uint8_t *bars) {
     int sel = start;
     bool dirty = true;
     board_update();   // clear stale edges
@@ -154,7 +154,7 @@ int ui_menu(const char *title, const char *const *items, int count, int start,
         if (ok_click) return sel;              // front button -> select
         if (nav_long) return -1;               // hold side -> back
         if (dirty) {
-            draw_menu(title, items, count, sel, bars, colors);
+            draw_menu(title, items, count, sel, bars);
             dirty = false;
         }
         delay(8);

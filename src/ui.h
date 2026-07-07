@@ -8,10 +8,8 @@ void ui_splash(const char *version);
 // Blocking list menu. Returns selected index, or -1 if Back (long NAV).
 // If `bars` is non-null (one 0..4 level per item), a signal-strength icon is
 // drawn to the left of each row (used by the WiFi scan list).
-// If `colors` is non-null (one RGB565 per item), it sets each non-selected
-// row's text color (used to flag deauth-vulnerable vs PMF-protected APs).
 int ui_menu(const char *title, const char *const *items, int count, int start = 0,
-            const uint8_t *bars = nullptr, const uint16_t *colors = nullptr);
+            const uint8_t *bars = nullptr);
 
 // Static screens (draw once, caller handles input).
 void ui_message(const char *title, const char *line1, const char *line2 = nullptr);

