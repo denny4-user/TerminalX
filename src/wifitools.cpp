@@ -291,36 +291,47 @@ static void run_beacon_spam(bool funny) {
     ui_hint("M5 = stop    hold side = exit");
 
     int n = build_ap_set(funny);
-    static const uint8_t chans[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
+    // Popular non-overlapping channels first, then the rest — most clients park
+    // on 1/6/11, so those get beaconed most often.
+    static const uint8_t chans[] = {1, 6, 11, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13};
     const int nCh = sizeof(chans) / sizeof(chans[0]);
 
     uint8_t buf[160];
-    uint32_t sent = 0, lastDraw = 0;
+    uint32_t sent = 0, err = 0, lastDraw = 0;
     int ci = 0;
+    uint8_t ch = chans[0];
     bool stop = false;
 
     board_update();
     while (!stop) {
-        uint8_t ch = chans[ci];
+        // One full pass = every AP beaconed once on the current channel, PACED
+        // (vTaskDelay after each frame) so the small WiFi TX queue never
+        // overflows and drops frames — this is why only ~1 AP showed before.
+        for (int i = 0; i < n && !stop; i++) {
+            int len = build_beacon(buf, g_ap[i].bssid, g_ap[i].ssid,
+                                   g_ap[i].len, ch, g_ap[i].seq++);
+            for (int k = 0; k < 2; k++) {
+                if (esp_wifi_80211_tx(WIFI_IF_STA, buf, len, false) == ESP_OK) sent++;
+                else err++;
+            }
+            delay(1);                       // let the TX queue drain
+            if ((i & 7) == 0) {             // stay responsive to stop
+                board_update();
+                if (nav_long || ok_click) stop = true;
+            }
+        }
+
+        // Hop to the next channel once the whole list has beaconed.
+        ci = (ci + 1) % nCh;
+        ch = chans[ci];
         esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
 
-        // Dwell on this channel: blast every AP several times so a client
-        // scanning this channel is very likely to catch each beacon.
-        for (int rep = 0; rep < 4 && !stop; rep++) {
-            for (int i = 0; i < n; i++) {
-                int len = build_beacon(buf, g_ap[i].bssid, g_ap[i].ssid,
-                                       g_ap[i].len, ch, g_ap[i].seq++);
-                esp_wifi_80211_tx(WIFI_IF_STA, buf, len, false);
-                sent++;
-            }
-            delay(2);
-            board_update();
-            if (nav_long || ok_click) stop = true;
-        }
-        ci = (ci + 1) % nCh;
-
-        if (millis() - lastDraw > 200) {
+        board_update();
+        if (nav_long || ok_click) stop = true;
+        if (millis() - lastDraw > 250) {
             lastDraw = millis();
+            Serial.printf("[beacon] %d APs ch%d ok=%lu err=%lu\n",
+                          n, ch, (unsigned long)sent, (unsigned long)err);
             char l1[24], l2[24];
             snprintf(l1, sizeof(l1), "%d APs  ch%d", n, ch);
             snprintf(l2, sizeof(l2), "%s  %lu tx", funny ? "funny" : "random",
