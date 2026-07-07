@@ -11,7 +11,7 @@
 //  - useSmall(): built-in 6x8 GLCD font for small ASCII-only text (battery,
 //    hints, counters). Genuinely small and costs no extra flash.
 static inline void useFont()  { M5.Display.setFont(&fonts::efontJA_16); M5.Display.setTextSize(1); }
-static inline void useMenu()  { M5.Display.setFont(&fonts::efontJA_10); M5.Display.setTextSize(1); }
+static inline void useMenu()  { M5.Display.setFont(&fonts::efontJA_12); M5.Display.setTextSize(1); }
 static inline void useSmall() { M5.Display.setFont(&fonts::Font0);      M5.Display.setTextSize(1); }
 
 // Small 4-bar signal-strength icon; `level` 0..4 bars filled.
@@ -108,7 +108,7 @@ static void draw_menu(const char *title, const char *const *items, int count, in
     draw_header(title);
 
     const int top = 23;
-    const int rowH = 13;
+    const int rowH = 14;
     const int maxRows = (SCR_H - top) / rowH;   // ~8 rows (small font)
 
     int first = 0;
@@ -131,7 +131,7 @@ static void draw_menu(const char *title, const char *const *items, int count, in
                         s ? COL_BG : COL_ACCENT, s ? COL_ACCENT : COL_DIM);
             tx = 24;
         }
-        D.setCursor(tx, y + 2);
+        D.setCursor(tx, y + 1);
         D.print(items[idx]);
     }
 }
