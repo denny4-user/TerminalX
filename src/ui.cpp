@@ -22,42 +22,56 @@ void ui_splash(const char *version) {
     const int cols = SCR_W / CW;          // ~24 columns
     const int rows = SCR_H / CH + 1;      // visible rows
     int head[SCR_W / CW + 1];
-    for (int c = 0; c < cols; c++) head[c] = rows + (int)random(rows);  // start below
+    for (int c = 0; c < cols; c++) head[c] = -(int)random(rows);  // start above screen
 
+    // Phase 1: digits rain DOWNWARD.
     useSmall();
     uint32_t t0 = millis();
-    while (millis() - t0 < 1400) {
+    while (millis() - t0 < 1000) {
         for (int c = 0; c < cols; c++) {
-            int x = c * CW;
-            int h = head[c];
-            // erase the cell just below the trail (vacated as the stream rises)
-            int cy = (h + 3) * CH;
+            int x = c * CW, h = head[c];
+            int cy = (h - 3) * CH;                       // cell vacated above the trail
             if (cy >= 0 && cy < SCR_H) D.fillRect(x, cy, CW, CH, COL_BG);
-            // trail: head (bright) + two dimmer cells below it
-            for (int t = 0; t < 3; t++) {
-                int y = (h + t) * CH;
+            for (int t = 0; t < 3; t++) {                // head (bright, leading) + trail above
+                int y = (h - t) * CH;
                 if (y < 0 || y >= SCR_H) continue;
                 D.setTextColor((t == 0) ? COL_FG : (t == 1) ? COL_ACCENT : COL_DIM, COL_BG);
                 D.setCursor(x + 2, y + 2);
                 D.print((char)('0' + (int)random(10)));
             }
-            if (--head[c] < -3) head[c] = rows + (int)random(rows);   // respawn below
+            if (++head[c] > rows + 3) head[c] = -(int)random(rows);   // respawn above
         }
         delay(45);
     }
 
-    // Reveal
+    // Phase 2: the logo "decodes" out of the digits, left-to-right — each slot
+    // flickers random digits, then locks into its real character.
     D.fillScreen(COL_BG);
     useFont();
-    D.setTextColor(COL_ACCENT, COL_BG);
+    D.setTextSize(2);
     const char *name = "TerminalX";
-    D.setCursor((SCR_W - D.textWidth(name)) / 2, 48);
-    D.print(name);
+    const int nlen = 9;
+    const int charW = D.textWidth("0");
+    const int nx = (SCR_W - nlen * charW) / 2;
+    const int ny = 44;
+    for (int resolved = 0; resolved <= nlen; resolved++) {
+        D.fillRect(0, ny - 2, SCR_W, 36, COL_BG);
+        for (int k = 0; k < nlen; k++) {
+            char ch = (k < resolved) ? name[k] : (char)('0' + (int)random(10));
+            D.setTextColor((k < resolved) ? COL_ACCENT : COL_FG, COL_BG);
+            D.setCursor(nx + k * charW, ny);
+            D.print(ch);
+        }
+        delay(85);
+    }
+
+    // Version below, then hold.
+    D.setTextSize(1);
     useSmall();
     D.setTextColor(COL_DIM, COL_BG);
     char v[24];
     snprintf(v, sizeof(v), "v%s", version);
-    D.setCursor((SCR_W - D.textWidth(v)) / 2, 78);
+    D.setCursor((SCR_W - D.textWidth(v)) / 2, ny + 40);
     D.print(v);
     delay(750);
 }

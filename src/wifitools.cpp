@@ -33,8 +33,8 @@ struct NetInfo {
 static NetInfo g_nets[MAX_NET];
 static int     g_netCount = 0;
 
-// Menu-item scratch for the dynamic scan list.
-static char        g_lineBuf[MAX_NET][22];
+// Menu-item pointers for the dynamic scan list (point straight at the SSIDs;
+// no byte-level truncation, which would cut multibyte UTF-8 / Cyrillic mid-char).
 static const char *g_linePtr[MAX_NET];
 
 // ---- Frame templates ------------------------------------------------------
@@ -215,11 +215,8 @@ static void screen_scan() {
     }
 
     while (true) {
-        for (int i = 0; i < g_netCount; i++) {
-            snprintf(g_lineBuf[i], sizeof(g_lineBuf[i]), "%-13.13s c%-2d",
-                     g_nets[i].ssid, g_nets[i].ch);
-            g_linePtr[i] = g_lineBuf[i];
-        }
+        // Show only the SSID here; channel/RSSI/BSSID appear on the AP detail.
+        for (int i = 0; i < g_netCount; i++) g_linePtr[i] = g_nets[i].ssid;
         int c = ui_menu("Networks", g_linePtr, g_netCount);
         if (c < 0) return;
         net_detail(g_nets[c]);
