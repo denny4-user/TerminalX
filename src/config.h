@@ -6,7 +6,7 @@
 // Philosophy: minimal, optimized, bug-free.
 // =============================================
 
-#define TERMINALX_VERSION "0.6.2"
+#define TERMINALX_VERSION "0.7.0"
 
 // ---- Pins (M5StickS3) ----------------------------------------
 #ifndef IR_TX_PIN

