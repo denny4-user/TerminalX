@@ -5,6 +5,7 @@
 #include <IRsend.h>
 #include <IRrecv.h>
 #include <IRutils.h>
+#include <driver/gpio.h>   // gpio_reset_pin: free the IR pins from JTAG/strap function
 
 static IRsend irsend(IR_TX_PIN);
 
@@ -15,12 +16,18 @@ static decode_results results;
 
 void ir_init() {
     irsend.begin();
+    // GPIO46 is an ESP32-S3 strapping pin; reset it to a plain GPIO before use
+    // (Bruce does this via setup_ir_pin) or TV-B-Gone / send is unreliable.
+    gpio_reset_pin((gpio_num_t)IR_TX_PIN);
     pinMode(IR_TX_PIN, OUTPUT);
     digitalWrite(IR_TX_PIN, LOW);
 }
 
 void ir_rx_start() {
     irrecv.enableIRIn();
+    // GPIO42 is an ESP32-S3 JTAG pin (MTMS); without gpio_reset_pin it stays in
+    // JTAG mode and never sees the remote — this is why RX capture failed.
+    gpio_reset_pin((gpio_num_t)IR_RX_PIN);
     pinMode(IR_RX_PIN, INPUT_PULLUP);   // Bruce: setup_ir_pin(irRx, INPUT_PULLUP)
 }
 
