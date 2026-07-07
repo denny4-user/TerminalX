@@ -99,30 +99,47 @@ static void gen_mac(uint8_t *mac) {
     mac[0] = (mac[0] & 0xFC) | 0x02;   // unicast + locally administered
 }
 
-// ---- Beacon frame builder (variable length, clean IEs) --------------------
-// Builds an open-network beacon into buf; returns the frame length.
-static int build_beacon(uint8_t *buf, const uint8_t *mac,
-                        const char *ssid, uint8_t ssidLen, uint8_t channel) {
+// ---- Beacon frame builder --------------------------------------------------
+// Builds a realistic WPA2-PSK beacon into buf; returns the frame length.
+// A stable per-AP BSSID + incrementing sequence number is what makes clients
+// (incl. macOS) list each fake network as a distinct, persistent AP instead of
+// merging/dropping the flapping noise a per-frame-random MAC produces.
+static int build_beacon(uint8_t *buf, const uint8_t *bssid, const char *ssid,
+                        uint8_t ssidLen, uint8_t channel, uint16_t seq) {
     if (ssidLen > 32) ssidLen = 32;
     int i = 0;
 
-    buf[i++] = 0x80; buf[i++] = 0x00; buf[i++] = 0x00; buf[i++] = 0x00;  // FC + dur
-    for (int k = 0; k < 6; k++) buf[i++] = 0xFF;                          // dst bcast
-    memcpy(buf + i, mac, 6); i += 6;                                      // src
-    memcpy(buf + i, mac, 6); i += 6;                                      // BSSID
-    buf[i++] = 0x00; buf[i++] = 0x00;                                     // seq
-    for (int k = 0; k < 8; k++) buf[i++] = 0x00;                          // timestamp
-    buf[i++] = 0x64; buf[i++] = 0x00;                                     // interval
-    buf[i++] = 0x01; buf[i++] = 0x00;                                     // capability (ESS)
+    buf[i++] = 0x80; buf[i++] = 0x00;                    // FC: beacon
+    buf[i++] = 0x00; buf[i++] = 0x00;                    // duration
+    for (int k = 0; k < 6; k++) buf[i++] = 0xFF;         // DA: broadcast
+    memcpy(buf + i, bssid, 6); i += 6;                   // SA
+    memcpy(buf + i, bssid, 6); i += 6;                   // BSSID
+    buf[i++] = (seq << 4) & 0xFF;                        // seq ctrl (frag 0)
+    buf[i++] = (seq >> 4) & 0xFF;
+    for (int k = 0; k < 8; k++) buf[i++] = 0x00;         // timestamp
+    buf[i++] = 0x64; buf[i++] = 0x00;                    // beacon interval (100 TU)
+    buf[i++] = 0x11; buf[i++] = 0x00;                    // capability: ESS + Privacy
 
-    buf[i++] = 0x00; buf[i++] = ssidLen;                                  // SSID IE
+    buf[i++] = 0x00; buf[i++] = ssidLen;                 // SSID IE
     memcpy(buf + i, ssid, ssidLen); i += ssidLen;
 
-    buf[i++] = 0x01; buf[i++] = 0x08;                                     // rates IE
+    buf[i++] = 0x01; buf[i++] = 0x08;                    // supported rates
     buf[i++] = 0x82; buf[i++] = 0x84; buf[i++] = 0x8b; buf[i++] = 0x96;
     buf[i++] = 0x24; buf[i++] = 0x30; buf[i++] = 0x48; buf[i++] = 0x6c;
 
     buf[i++] = 0x03; buf[i++] = 0x01; buf[i++] = channel;                 // DS param
+
+    buf[i++] = 0x32; buf[i++] = 0x04;                    // extended rates
+    buf[i++] = 0x0c; buf[i++] = 0x12; buf[i++] = 0x18; buf[i++] = 0x60;
+
+    buf[i++] = 0x30; buf[i++] = 0x14;                    // RSN (WPA2-PSK, CCMP)
+    buf[i++] = 0x01; buf[i++] = 0x00;                    // version
+    buf[i++] = 0x00; buf[i++] = 0x0f; buf[i++] = 0xac; buf[i++] = 0x04;   // group: CCMP
+    buf[i++] = 0x01; buf[i++] = 0x00;                    // pairwise count
+    buf[i++] = 0x00; buf[i++] = 0x0f; buf[i++] = 0xac; buf[i++] = 0x04;   // pairwise: CCMP
+    buf[i++] = 0x01; buf[i++] = 0x00;                    // AKM count
+    buf[i++] = 0x00; buf[i++] = 0x0f; buf[i++] = 0xac; buf[i++] = 0x02;   // AKM: PSK
+    buf[i++] = 0x00; buf[i++] = 0x00;                    // RSN capabilities
 
     return i;
 }
@@ -238,50 +255,78 @@ static void screen_scan() {
 // ===========================================================================
 //  Beacon Spam
 // ===========================================================================
+#define SPAM_MAX 48
+
+// A persistent fake AP: fixed SSID + fixed BSSID + its own rolling sequence.
+struct FakeAP {
+    char     ssid[33];
+    uint8_t  len;
+    uint8_t  bssid[6];
+    uint16_t seq;
+};
+static FakeAP g_ap[SPAM_MAX];
+
+// Build the set of fake APs once (stable SSIDs + BSSIDs for the whole run).
+static int build_ap_set(bool funny) {
+    int n = funny ? FUNNY_COUNT : 40;
+    if (n > SPAM_MAX) n = SPAM_MAX;
+    for (int i = 0; i < n; i++) {
+        FakeAP &a = g_ap[i];
+        if (funny) {
+            strncpy(a.ssid, FUNNY_SSIDS[i], 32);
+            a.ssid[32] = 0;
+            a.len = (uint8_t)strlen(a.ssid);
+        } else {
+            a.len = make_random_ssid(a.ssid);
+        }
+        gen_mac(a.bssid);              // stable BSSID for this AP
+        a.seq = esp_random() & 0x0FFF;
+    }
+    return n;
+}
+
 static void run_beacon_spam(bool funny) {
     wifi_attack_begin(1);
     M5.Display.fillScreen(COL_BG);
     ui_hint("M5 = stop    hold side = exit");
 
-    uint8_t buf[128], mac[6];
+    int n = build_ap_set(funny);
+    static const uint8_t chans[] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13};
+    const int nCh = sizeof(chans) / sizeof(chans[0]);
+
+    uint8_t buf[160];
     uint32_t sent = 0, lastDraw = 0;
-    int idx = 0;
+    int ci = 0;
+    bool stop = false;
 
     board_update();
-    while (true) {
-        board_update();
-        if (nav_long || ok_click) break;
-
-        char ssid[33];
-        uint8_t slen;
-        if (funny) {
-            const char *s = FUNNY_SSIDS[idx % FUNNY_COUNT];
-            slen = (uint8_t)strlen(s);
-            if (slen > 32) slen = 32;
-            memcpy(ssid, s, slen);
-        } else {
-            slen = make_random_ssid(ssid);
-        }
-
-        uint8_t ch = 1 + (idx % 11);
+    while (!stop) {
+        uint8_t ch = chans[ci];
         esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
-        gen_mac(mac);
 
-        int len = build_beacon(buf, mac, ssid, slen, ch);
-        for (int r = 0; r < 3; r++) {
-            esp_wifi_80211_tx(WIFI_IF_STA, buf, len, false);
-            sent++;
+        // Dwell on this channel: blast every AP several times so a client
+        // scanning this channel is very likely to catch each beacon.
+        for (int rep = 0; rep < 4 && !stop; rep++) {
+            for (int i = 0; i < n; i++) {
+                int len = build_beacon(buf, g_ap[i].bssid, g_ap[i].ssid,
+                                       g_ap[i].len, ch, g_ap[i].seq++);
+                esp_wifi_80211_tx(WIFI_IF_STA, buf, len, false);
+                sent++;
+            }
+            delay(2);
+            board_update();
+            if (nav_long || ok_click) stop = true;
         }
-        idx++;
+        ci = (ci + 1) % nCh;
 
-        if (millis() - lastDraw > 150) {
+        if (millis() - lastDraw > 200) {
             lastDraw = millis();
             char l1[24], l2[24];
-            snprintf(l1, sizeof(l1), "frames %lu", (unsigned long)sent);
-            snprintf(l2, sizeof(l2), "%s  ch%d", funny ? "funny" : "random", ch);
+            snprintf(l1, sizeof(l1), "%d APs  ch%d", n, ch);
+            snprintf(l2, sizeof(l2), "%s  %lu tx", funny ? "funny" : "random",
+                     (unsigned long)sent);
             ui_live("Beacon Spam", l1, l2);
         }
-        delay(1);
     }
     wifi_off();
 }
