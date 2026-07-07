@@ -6,7 +6,10 @@
 void ui_splash(const char *version);
 
 // Blocking list menu. Returns selected index, or -1 if Back (long NAV).
-int ui_menu(const char *title, const char *const *items, int count, int start = 0);
+// If `bars` is non-null (one 0..4 level per item), a signal-strength icon is
+// drawn to the left of each row (used by the WiFi scan list).
+int ui_menu(const char *title, const char *const *items, int count, int start = 0,
+            const uint8_t *bars = nullptr);
 
 // Static screens (draw once, caller handles input).
 void ui_message(const char *title, const char *line1, const char *line2 = nullptr);

@@ -36,6 +36,15 @@ static int     g_netCount = 0;
 // Menu-item pointers for the dynamic scan list (point straight at the SSIDs;
 // no byte-level truncation, which would cut multibyte UTF-8 / Cyrillic mid-char).
 static const char *g_linePtr[MAX_NET];
+static uint8_t     g_bars[MAX_NET];     // per-network signal level (0..4) for the icon
+
+static uint8_t rssi_bars(int32_t rssi) {
+    if (rssi >= -55) return 4;
+    if (rssi >= -65) return 3;
+    if (rssi >= -72) return 2;
+    if (rssi >= -80) return 1;
+    return 0;
+}
 
 // ---- Frame templates ------------------------------------------------------
 // 26-byte deauthentication frame (Bruce deauth_frame_default). Runtime fills
@@ -215,9 +224,12 @@ static void screen_scan() {
     }
 
     while (true) {
-        // Show only the SSID here; channel/RSSI/BSSID appear on the AP detail.
-        for (int i = 0; i < g_netCount; i++) g_linePtr[i] = g_nets[i].ssid;
-        int c = ui_menu("Networks", g_linePtr, g_netCount);
+        // Show SSID + signal icon here; channel/RSSI/BSSID appear on the AP detail.
+        for (int i = 0; i < g_netCount; i++) {
+            g_linePtr[i] = g_nets[i].ssid;
+            g_bars[i]    = rssi_bars(g_nets[i].rssi);
+        }
+        int c = ui_menu("Networks", g_linePtr, g_netCount, 0, g_bars);
         if (c < 0) return;
         net_detail(g_nets[c]);
     }

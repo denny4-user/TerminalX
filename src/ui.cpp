@@ -11,7 +11,16 @@
 //  - useSmall(): built-in 6x8 GLCD font for small ASCII-only text (battery,
 //    hints, counters). Genuinely small and costs no extra flash.
 static inline void useFont()  { M5.Display.setFont(&fonts::efontJA_16); M5.Display.setTextSize(1); }
+static inline void useMenu()  { M5.Display.setFont(&fonts::efontJA_12); M5.Display.setTextSize(1); }
 static inline void useSmall() { M5.Display.setFont(&fonts::Font0);      M5.Display.setTextSize(1); }
+
+// Small 4-bar signal-strength icon; `level` 0..4 bars filled.
+static void draw_signal(int x, int yBottom, int level, uint16_t filled, uint16_t empty) {
+    for (int b = 0; b < 4; b++) {
+        int bh = 3 + b * 2;                          // 3,5,7,9 px
+        M5.Display.fillRect(x + b * 3, yBottom - bh, 2, bh, (b < level) ? filled : empty);
+    }
+}
 
 void ui_splash(const char *version) {
     auto &D = M5.Display;
@@ -93,33 +102,42 @@ static void draw_header(const char *title) {
     D.drawFastHLine(0, 20, SCR_W, COL_DIM);
 }
 
-static void draw_menu(const char *title, const char *const *items, int count, int sel) {
+static void draw_menu(const char *title, const char *const *items, int count, int sel,
+                      const uint8_t *bars) {
     auto &D = M5.Display;
     draw_header(title);
 
-    const int top = 26;
-    const int rowH = 22;
-    const int maxRows = (SCR_H - top) / rowH;   // ~4-5 rows
+    const int top = 24;
+    const int rowH = 15;
+    const int maxRows = (SCR_H - top) / rowH;   // ~7 rows (smaller font)
 
     int first = 0;
     if (sel >= maxRows) first = sel - maxRows + 1;
 
-    useFont();
+    useMenu();
     for (int i = 0; i < maxRows && (first + i) < count; i++) {
         int idx = first + i;
         int y = top + i * rowH;
-        if (idx == sel) {
-            D.fillRoundRect(2, y - 1, SCR_W - 4, rowH - 2, 3, COL_ACCENT);
+        bool s = (idx == sel);
+        if (s) {
+            D.fillRoundRect(2, y, SCR_W - 4, rowH - 1, 2, COL_ACCENT);
             D.setTextColor(COL_BG, COL_ACCENT);
         } else {
             D.setTextColor(COL_FG, COL_BG);
         }
-        D.setCursor(8, y + 3);
+        int tx = 8;
+        if (bars) {                             // signal icon left of the SSID
+            draw_signal(6, y + rowH - 3, bars[idx],
+                        s ? COL_BG : COL_ACCENT, s ? COL_ACCENT : COL_DIM);
+            tx = 24;
+        }
+        D.setCursor(tx, y + 2);
         D.print(items[idx]);
     }
 }
 
-int ui_menu(const char *title, const char *const *items, int count, int start) {
+int ui_menu(const char *title, const char *const *items, int count, int start,
+            const uint8_t *bars) {
     int sel = start;
     bool dirty = true;
     board_update();   // clear stale edges
@@ -136,7 +154,7 @@ int ui_menu(const char *title, const char *const *items, int count, int start) {
         if (ok_click) return sel;              // front button -> select
         if (nav_long) return -1;               // hold side -> back
         if (dirty) {
-            draw_menu(title, items, count, sel);
+            draw_menu(title, items, count, sel, bars);
             dirty = false;
         }
         delay(8);
